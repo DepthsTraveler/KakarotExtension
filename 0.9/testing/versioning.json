@@ -1,12 +1,12 @@
 {
-  "buildTime": "2026-10-15T07:11:16.445Z",
+  "buildTime": "2026-10-15T07:32:27.917Z",
   "builtWith": {
     "toolchain": "1.0.0-alpha.91",
     "types": "1.0.0-alpha.91"
   },
   "repository": {
-    "name": "kakarotextension",
-    "description": "Kakarot extensions for Paperback"
+    "name": "Modified KakarotExtension",
+    "description": "Modified Kakarot extensions for Paperback"
   },
   "sources": [
     {
