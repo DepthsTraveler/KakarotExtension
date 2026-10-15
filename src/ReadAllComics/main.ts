@@ -15,7 +15,6 @@ import {
   MangaProviding,
   PagedResults,
   Request,
-  SearchFilter,
   SearchQuery,
   SearchResultItem,
   SearchResultsProviding,
@@ -38,7 +37,7 @@ type ReadAllComicsImplementation = Extension &
   DiscoverSectionProviding;
 
 export class ReadAllComicsExtension implements ReadAllComicsImplementation {
-  cookieStorageInterceptor = new CookieStorageInterceptor({storage: "stateManager"})
+  cookieStorageInterceptor = new CookieStorageInterceptor({ storage: "stateManager" });
   requestManager = new ReadAllComicsInterceptor("main");
 
   async initialise(): Promise<void> {
@@ -68,15 +67,9 @@ export class ReadAllComicsExtension implements ReadAllComicsImplementation {
     }
   }
 
-  async getSearchFilters(): Promise<SearchFilter[]> {
-    const filters: SearchFilter[] = [];
-
-    return filters;
-  }
-
   async getSearchResults(
-    query: SearchQuery,
-    metadata: { page?: number; collectedIds?: string[] } | undefined,
+    query: SearchQuery<ReadAllComicsMetadata>,
+    metadata: ReadAllComicsMetadata | undefined,
   ): Promise<PagedResults<SearchResultItem>> {
     const collectedIds: string[] = metadata?.collectedIds ?? [];
     const page: number = metadata?.page ?? 1;
@@ -96,13 +89,15 @@ export class ReadAllComicsExtension implements ReadAllComicsImplementation {
       });
 
       // convert DiscoverSectionItem -> SearchResultItem
-      const results: SearchResultItem[] = catalogue.items.map((item) => ({
-        mangaId: item.mangaId,
-        imageUrl: item.imageUrl,
-        title: item.title,
-        subtitle: item.subtitle,
-        metadata: undefined,
-      }));
+      const results: SearchResultItem[] = catalogue.items
+        .filter((item) => item.type === "simpleCarouselItem")
+        .map((item) => ({
+          mangaId: item.mangaId,
+          imageUrl: item.imageUrl,
+          title: item.title,
+          subtitle: item.subtitle,
+          metadata: undefined,
+        }));
 
       return {
         items: results,
@@ -110,44 +105,19 @@ export class ReadAllComicsExtension implements ReadAllComicsImplementation {
       };
     }
 
-    // Original search logic for when search term is provided
     const request = {
-      url: `${baseUrl}/?story=${encodeURIComponent(searchTerm)}&s=&type=comic`,
+      url: `${baseUrl}/?story=${encodeURIComponent(searchTerm.trim())}&s=&type=comic`,
       method: "GET",
     };
 
     const $ = await this.fetchCheerio(request);
-    const results: SearchResultItem[] = [];
-    const newCollectedIds = [...collectedIds];
-
-    $(".list-story.categories > li").each((_, element) => {
-      const unit = $(element);
-      const infoLink = unit.find("a.cat-title");
-
-      const title = infoLink.text().trim();
-      const imageEl = unit.find("img.book-cover");
-      const rawImage = imageEl.attr("data-src") || imageEl.attr("src") || "";
-      const image = rawImage;
-      const categoryLink = unit.find("a.book-link").attr("href") || "";
-
-      const mangaIdMatch = categoryLink.match(/category\/([^/]+)\//);
-      const mangaId = mangaIdMatch ? mangaIdMatch[1] : "";
-
-      const dateText = unit.find(".latest-date").text().replace("Updated:", "").trim();
-      const totalIssues = unit.find(".cat-total-issues").text().trim();
-      const fullSubtitle = totalIssues ? `${dateText} | ${totalIssues}` : dateText;
-
-      if (title && mangaId && !newCollectedIds.includes(mangaId)) {
-        newCollectedIds.push(mangaId);
-        results.push({
-          mangaId: mangaId,
-          imageUrl: image,
-          title: title,
-          subtitle: fullSubtitle,
-          metadata: undefined,
-        });
-      }
-    });
+    const results = parseSeriesList($).map((series) => ({
+      mangaId: series.mangaId,
+      imageUrl: series.imageUrl,
+      title: series.title,
+      subtitle: series.subtitle,
+      metadata: undefined,
+    }));
 
     return {
       items: results,
@@ -176,23 +146,19 @@ export class ReadAllComicsExtension implements ReadAllComicsImplementation {
   async getMangaDetails(mangaId: string): Promise<SourceManga> {
     // Expected mangaId: 6975-invincible-2003
     const request = { url: `${baseUrl}/category/${mangaId}`, method: "GET" };
-    
+
     const $ = await this.fetchCheerio(request);
 
     const title = $("h1").first().text().trim();
     const rawImage = $(".description-archive img").first().attr("src") || "";
-    const image = rawImage.startsWith("/")
-      ? `https://2.bp.blogspot.com${rawImage}`
-      : rawImage;
+    const image = rawImage.startsWith("/") ? `https://2.bp.blogspot.com${rawImage}` : rawImage;
 
     const description = $(".b strong")
       .map((_, el) => $(el).parent().text().trim())
       .get()
       .filter(
         (text) =>
-          !text.startsWith("Vol") &&
-          !text.includes("Publisher:") &&
-          !text.includes("Genres:"),
+          !text.startsWith("Vol") && !text.includes("Publisher:") && !text.includes("Genres:"),
       )
       .join("\n")
       .trim();
@@ -332,7 +298,7 @@ export class ReadAllComicsExtension implements ReadAllComicsImplementation {
 
   async getCatalogueSectionItems(
     section: DiscoverSection,
-    metadata: { page?: number; collectedIds?: string[] } | undefined,
+    metadata: ReadAllComicsMetadata | undefined,
   ): Promise<PagedResults<DiscoverSectionItem>> {
     const page = metadata?.page ?? 1;
     const collectedIds = metadata?.collectedIds ?? [];
@@ -419,7 +385,7 @@ export class ReadAllComicsExtension implements ReadAllComicsImplementation {
               origin: baseUrl,
             },
           },
-          "Cloudflare bypass required, please complete the challenge."
+          "Cloudflare bypass required, please complete the challenge.",
         );
       case 404:
         throw new Error("Content not found");
@@ -448,6 +414,60 @@ function createDiscoverSectionItem(options: {
     subtitle: options.subtitle,
     metadata: undefined,
   };
+}
+
+interface ParsedSeries {
+  mangaId: string;
+  title: string;
+  imageUrl: string;
+  subtitle: string;
+}
+
+/**
+ * Parses a list of series from a results page. Handles both layouts the site
+ * has used: the card layout (a.book-link, a.cat-title, img.book-cover) and the
+ * older plain list where each li holds one link to /category/<slug>/.
+ */
+export function parseSeriesList($: CheerioAPI): ParsedSeries[] {
+  const series: ParsedSeries[] = [];
+  const seen = new Set<string>();
+
+  $(".list-story li").each((_, element) => {
+    const unit = $(element);
+    const link = unit
+      .find("a.book-link, a.cat-title, a[href*='/category/']")
+      .filter((_, a) => /\/category\/[^/?#]+/.test($(a).attr("href") ?? ""))
+      .first();
+
+    const mangaId = parseCategorySlug(link.attr("href"));
+    if (!mangaId || seen.has(mangaId)) return;
+
+    const titleLink = unit.find("a.cat-title").first();
+    const title = (
+      titleLink.text().trim() ||
+      link.attr("title")?.trim() ||
+      link.text().trim()
+    ).replace(/\s+/g, " ");
+    if (!title) return;
+
+    const imageEl = unit.find("img.book-cover, img").first();
+    const imageUrl =
+      imageEl.attr("data-src") || imageEl.attr("data-lazy-src") || imageEl.attr("src") || "";
+
+    const dateText = unit.find(".latest-date").text().replace("Updated:", "").trim();
+    const totalIssues = unit.find(".cat-total-issues").text().trim();
+    const subtitle = [dateText, totalIssues].filter(Boolean).join(" | ");
+
+    seen.add(mangaId);
+    series.push({ mangaId, title, imageUrl, subtitle });
+  });
+
+  return series;
+}
+
+function parseCategorySlug(href: string | undefined): string {
+  const match = href?.match(/\/category\/([^/?#]+)/);
+  return match ? decodeURIComponent(match[1]) : "";
 }
 
 export const ReadAllComics = new ReadAllComicsExtension();
