@@ -27,6 +27,6 @@ A repository for paperback that includes both manga and comic extensions
 2. Add this repository using [this link](https://depthstraveler.github.io/KakarotExtension/0.9/testing/)
 3. Install and enjoy reading!
 
----
+--
 
 _Note: This extension is not affiliated with the source websites._
