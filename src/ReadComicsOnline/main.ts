@@ -584,7 +584,7 @@ export class ReadComicsOnlineExtension
   }
 
   async cloudflareBypassCompleted(
-    _request: globalThis.Request,
+    _request: unknown,
     cookies: Cookie[],
     _localStorage: Record<string, string>,
   ): Promise<void> {
